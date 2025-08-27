@@ -1,7 +1,8 @@
+import dotenv from "dotenv";
 import express from "express";
+import mongoose from "mongoose";
 import MongoStore from "connect-mongo";
 import passport from "passport";
-import dotenv from "dotenv";
 import bodyParser from "body-parser";
 import session from "express-session";
 import cors from "cors";
@@ -28,7 +29,7 @@ connectDB();
 // await Bot.createCollection();
 // await Blog.createCollection();
 // await Bot.syncIndexes();
-// await Blog.syncIndexes();
+// await Blog.syncIndexes()
 
 // CORS: cho phép gọi từ FE domain
 const allow = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim());
@@ -55,7 +56,7 @@ app.use(
       maxAge: 1000 * 60 * 60 * 24 * 7,
     },
     store: MongoStore.create({
-      mongoUrl: process.env.MONGODB_URI || process.env.MONGO_URI,
+      mongoUrl: process.env.MONGO_URI,
       dbName: "ai-tooler",
       touchAfter: 24 * 3600,
     }),
@@ -66,7 +67,7 @@ app.use(bodyParser.json());
 app.use(express.json());
 app.use(passport.initialize());
 app.use(passport.session());
-Blog.syncIndexes?.();
+
 // Mount routes
 app.use("/auth", authRoutes);
 app.use("/api/blogs", blogRoutes);
@@ -75,6 +76,20 @@ app.use("/api/search", searchRoutes);
 // Error handling middleware
 app.use(errorHandler);
 app.use("/api/bots", botRoutes);
+
+// Test connect
+app.get("/healthz", async (_req, res) => {
+  try {
+    const result = await mongoose.connection.db.admin().command({ ping: 1 });
+    res.json({ ok: true, state: mongoose.connection.readyState, ping: result });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      state: mongoose.connection.readyState,
+      error: e.message,
+    });
+  }
+});
 
 // Start the server
 const PORT = process.env.PORT || 5000;
