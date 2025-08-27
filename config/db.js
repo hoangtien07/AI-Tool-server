@@ -8,6 +8,9 @@ if (!uri) {
   process.exit(1);
 }
 
+mongoose.set("bufferCommands", false); // tránh buffer rồi timeout 10s
+mongoose.set("strictQuery", true);
+
 const connectDB = async () => {
   console.log("start");
 
