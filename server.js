@@ -35,7 +35,7 @@ connectDB();
 const allow = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim());
 app.use(
   cors({
-    // origin: "http://localhost:5173",
+    origin: "https://aitooler.io/",
     origin(origin, cb) {
       if (!origin || allow.includes(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS"));
@@ -57,7 +57,7 @@ app.use(
     },
     store: MongoStore.create({
       mongoUrl: process.env.MONGO_URI,
-      dbName: "ai-tooler",
+      dbName: "ai_tooler",
       touchAfter: 24 * 3600,
     }),
   })
@@ -72,10 +72,10 @@ app.use(passport.session());
 app.use("/auth", authRoutes);
 app.use("/api/blogs", blogRoutes);
 app.use("/api/search", searchRoutes);
+app.use("/api/bots", botRoutes);
 
 // Error handling middleware
 app.use(errorHandler);
-app.use("/api/bots", botRoutes);
 
 // Test connect
 app.get("/healthz", async (_req, res) => {
