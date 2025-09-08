@@ -10,8 +10,8 @@ import {
 
 const router = Router();
 
-router.get("/", listBlogs);
 router.post("/", createBlog);
+router.get("/", listBlogs);
 
 router.get("/:slug", getBlog);
 router.patch("/:slug", updateBlog);

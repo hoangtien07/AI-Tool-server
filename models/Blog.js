@@ -1,8 +1,17 @@
-// models/Blog.js
 import mongoose from "mongoose";
 
+const LocalizedString = {
+  vi: { type: String, required: true },
+  en: { type: String, required: true },
+};
+
+const LocalizedRich = {
+  vi: { raw: mongoose.Schema.Types.Mixed, html: String, text: String },
+  en: { raw: mongoose.Schema.Types.Mixed, html: String, text: String },
+};
+
 function slugify(text = "") {
-  return text
+  return String(text)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
@@ -14,20 +23,18 @@ function slugify(text = "") {
 
 const BlogSchema = new mongoose.Schema(
   {
-    title: { type: String, required: true },
-    content: { type: String, required: true },
-    slug: { type: String, required: true, unique: true }, // ← unique slug
+    title: LocalizedString,
+    slug: { type: String, required: true, unique: true },
     tags: [{ type: String, index: true }],
     image: String,
-    excerpt: String,
+    excerpt: LocalizedString,
+    content: LocalizedRich,
     status: {
       type: String,
       enum: ["draft", "active", "archived"],
       default: "active",
     },
     publishedAt: { type: Date, default: Date.now },
-
-    // các field seed Notion (không bắt buộc)
     source: { type: String, enum: ["notion", "manual"], default: "manual" },
     sourceUrl: String,
     externalKey: { type: String, unique: true, sparse: true },
@@ -35,11 +42,32 @@ const BlogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-BlogSchema.index({ title: "text", content: "text", tags: "text" });
+BlogSchema.index(
+  {
+    "title.vi": "text",
+    "title.en": "text",
+    "excerpt.vi": "text",
+    "excerpt.en": "text",
+    "content.vi.text": "text",
+    "content.en.text": "text",
+  },
+  {
+    name: "blog_text",
+    weights: {
+      "title.vi": 10,
+      "title.en": 10,
+      "excerpt.vi": 6,
+      "excerpt.en": 6,
+      "content.vi.text": 2,
+      "content.en.text": 2,
+    },
+  }
+);
 
 BlogSchema.methods.ensureUniqueSlug = async function () {
   const Blog = this.constructor;
-  const base = this.slug ? slugify(this.slug) : slugify(this.title || "");
+  const baseTitle = this.title?.vi || this.title?.en || "";
+  const base = this.slug ? slugify(this.slug) : slugify(baseTitle);
   let candidate = base || String(this._id);
   let i = 1;
   while (await Blog.exists({ slug: candidate, _id: { $ne: this._id } })) {
@@ -53,14 +81,7 @@ BlogSchema.pre("validate", async function (next) {
   if (!this.slug) await this.ensureUniqueSlug();
   next();
 });
-
-// helper: tìm theo "blog" (slug ưu tiên, fallback id 24-hex)
-BlogSchema.statics.findByBlogKey = async function (key) {
-  const Blog = this;
-  let doc = await Blog.findOne({ slug: key });
-  if (!doc && /^[a-f0-9]{24}$/i.test(key)) doc = await Blog.findById(key);
-  return doc;
-};
-
-const Blog = mongoose.model("Blog", BlogSchema);
-export default Blog;
+try {
+  mongoose.deleteModel("Blog");
+} catch {}
+export default mongoose.model("Blog", BlogSchema);
