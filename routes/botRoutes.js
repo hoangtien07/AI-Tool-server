@@ -14,16 +14,15 @@ import {
 
 const router = Router();
 
-// CRUD + tiện ích
-router.post("/", createBot); // POST   /api/bots
-router.get("/", listBots); // GET    /api/bots?q=&tag=&status=&skip=&limit=&sort=-views
+router.post("/", createBot);
+router.get("/", listBots); // ?q=&tag=&category=&status=&page=&limit=&lang=
 router.get("/facets", getBotFacets);
-router.get("/top", topBots); // GET    /api/bots/top?limit=10
-router.get("/slug/:slug", getBotBySlug); // GET    /api/bots/slug/:slug
-router.get("/:id", getBotById); // GET    /api/bots/:id
-router.patch("/:id", updateBot); // PATCH  /api/bots/:id
-router.delete("/:id", deleteBot); // DELETE /api/bots/:id
-router.patch("/:id/views", incViews); // PATCH  /api/bots/:id/views
-router.post("/:id/click", trackClick); // POST   /api/bots/:id/click
+router.get("/top", topBots);
+router.get("/slug/:slug", getBotBySlug);
+router.get("/:id", getBotById);
+router.patch("/:id", updateBot);
+router.delete("/:id", deleteBot);
+router.patch("/:id/views", incViews);
+router.post("/:id/click", trackClick);
 
 export default router;
