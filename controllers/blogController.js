@@ -51,15 +51,6 @@ function pack(input) {
   return { raw, html, text };
 }
 
-// Lấy lang từ query → header → mặc định
-function resolveLang(req) {
-  const q = req.query?.lang;
-  if (q) return normalizeLang(q);
-  const header = req.get("accept-language") || "";
-  const first = header.split(",")[0]?.split("-")[0] || "";
-  return normalizeLang(first);
-}
-
 // Fallback-safe finder (dùng ở mọi nơi)
 async function findByKey(key) {
   if (Blog.findByBlogKey) return Blog.findByBlogKey(key);
@@ -139,99 +130,163 @@ export async function createBlog(req, res, next) {
   }
 }
 
-// ───────────── LIST: GET /api/blogs?lang=vi&status=active&q=...&tag=...&page=1&limit=10
+// ====== helpers ======
+const escapeHtml = (s = "") =>
+  String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const escapeRe = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// q: `'slow motion' video` -> /(slow motion|video)/i  (flags tuỳ chọn)
+function buildQueryRegex(q, flags = "i") {
+  const parts = (String(q).match(/"([^"]+)"|(\S+)/g) || [])
+    .map((x) => x.replaceAll('"', ""))
+    .map(escapeRe)
+    .filter(Boolean);
+  if (!parts.length) return null;
+  return new RegExp("(" + parts.join("|") + ")", flags);
+}
+
+function highlightHTML(src = "", re) {
+  if (!src) return "";
+  const safe = escapeHtml(src);
+  return re ? safe.replace(re, "<mark>$1</mark>") : safe;
+}
+
+function firstMatchIndex(str = "", re) {
+  if (!re) return -1;
+  return str.search(re);
+}
+
+function makeSnippetForField(raw, re) {
+  if (!raw) return "";
+  const idx = firstMatchIndex(raw, re);
+  if (idx < 0) {
+    const safe = escapeHtml(raw);
+    return safe.length > 200 ? safe.slice(0, 200) + "…" : safe;
+  }
+  const start = Math.max(0, idx - 80);
+  const end = Math.min(raw.length, idx + 120);
+  const slice = raw.slice(start, end);
+  const html = highlightHTML(slice, re);
+  return (start > 0 ? "…" : "") + html + (end < raw.length ? "…" : "");
+}
+
+function resolveLang(req) {
+  const q = String(req.query.lang || "").toLowerCase();
+  if (q === "en") return "en";
+  if (q === "vi") return "vi";
+  // fallback theo header
+  const h = String(req.headers["accept-language"] || "").toLowerCase();
+  return h.startsWith("en") ? "en" : "vi";
+}
+
+// ====== controller ======
 export async function listBlogs(req, res, next) {
   try {
-    const lang = resolveLang(req); // đã có trong file (query -> header -> default)
-    const {
-      q,
-      tag,
-      status = "active",
-      page = 1,
-      limit = 10,
-      sort, // ví dụ "-publishedAt" | "publishedAt"
-    } = req.query;
+    const lang = resolveLang(req);
+    const { q, tag, status = "active", page = 1, limit = 10, sort } = req.query;
 
-    // ───────────── filter cơ bản
+    // Regex cho Mongo (i) và cho highlight (ig)
+    const reMongo = q ? buildQueryRegex(q, "i") : null;
+    const reHi    = q ? buildQueryRegex(q, "ig") : null;
+
+    // --- filter: title/excerpt/content (vi|en) + tags ---
     const filter = {};
     if (status) filter.status = status;
     if (tag) filter.tags = tag;
 
-    // ───────────── xác định có thể dùng $text hay không (phải có đúng 1 text index)
-    const hasQuery = q && String(q).trim();
-    let useText = false;
-    if (hasQuery) {
-      try {
-        const indexes = await Blog.collection.indexes();
-        const textIdxCount = indexes.filter((i) =>
-          Object.values(i.key || {}).includes("text")
-        ).length;
-        useText = textIdxCount === 1;
-      } catch {
-        useText = false;
-      }
+    if (reMongo) {
+      filter.$or = [
+        { "title.vi":         { $regex: reMongo } },
+        { "title.en":         { $regex: reMongo } },
+        { "excerpt.vi":       { $regex: reMongo } },
+        { "excerpt.en":       { $regex: reMongo } },
+        { "content.vi.text":  { $regex: reMongo } },
+        { "content.en.text":  { $regex: reMongo } },
+        { "tags":             { $regex: reMongo } },
+      ];
     }
 
-    // ───────────── build điều kiện tìm kiếm
-    if (hasQuery) {
-      if (useText) {
-        // tiếng Việt không có stemmer → dùng 'none'; EN dùng english
-        filter.$text = {
-          $search: q,
-          $language: lang === "en" ? "english" : "none",
-        };
-      } else {
-        // fallback regex khi chưa có text index đúng chuẩn
-        filter.$or = [
-          { "title.vi": { $regex: q, $options: "i" } },
-          { "title.en": { $regex: q, $options: "i" } },
-          { "excerpt.vi": { $regex: q, $options: "i" } },
-          { "excerpt.en": { $regex: q, $options: "i" } },
-          { "content.vi.text": { $regex: q, $options: "i" } },
-          { "content.en.text": { $regex: q, $options: "i" } },
-        ];
-      }
-    }
-
-    // ───────────── phân trang & sort
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const pageNum  = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
-
-    // sort: nếu đang dùng $text → sort theo score trước, sau đó publishedAt desc
-    const projection = useText ? { score: { $meta: "textScore" } } : {};
 
     const toSortObj = (s) => {
       if (!s) return { publishedAt: -1 };
       const desc = s.startsWith("-");
-      const key = desc ? s.slice(1) : s;
+      const key  = desc ? s.slice(1) : s;
       return { [key]: desc ? -1 : 1 };
     };
 
-    const sortOpt = useText
-      ? { score: { $meta: "textScore" }, publishedAt: -1 }
-      : toSortObj(typeof sort === "string" ? sort : "-publishedAt");
-
-    // ───────────── query DB
     const [total, docs] = await Promise.all([
       Blog.countDocuments(filter),
-      Blog.find(filter, projection)
-        .sort(sortOpt)
+      Blog.find(filter)
+        .sort(toSortObj(typeof sort === "string" ? sort : "-publishedAt"))
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
         .lean(),
     ]);
 
-    // ───────────── chuẩn hoá output theo locale (tránh null)
-    const items = docs.map((d) => ({
-      _id: d._id,
-      slug: d.slug,
-      image: d.image,
-      tags: d.tags || [],
-      status: d.status,
-      publishedAt: d.publishedAt,
-      title: String(pickLocalized(d.title, lang) || ""),
-      excerpt: String(pickLocalized(d.excerpt, lang) || ""),
-    }));
+    const items = docs.map((d) => {
+      const titleVi   = d.title?.vi || "";
+      const titleEn   = d.title?.en || "";
+      const excerptVi = d.excerpt?.vi || "";
+      const excerptEn = d.excerpt?.en || "";
+      const textVi    = d.content?.vi?.text || "";
+      const textEn    = d.content?.en?.text || "";
+
+      // title theo ngôn ngữ ưu tiên
+      const titlePref = lang === "vi" ? (titleVi || titleEn) : (titleEn || titleVi);
+
+      // highlight riêng cho title nếu tự nó match
+      const titleHighlighted =
+        reHi && titlePref && reHi.test(titlePref)
+          ? highlightHTML(titlePref, reHi)
+          : undefined;
+
+      // chọn nguồn để tạo snippet (ưu tiên theo lang hiện tại)
+      const sources = [
+        { raw: lang === "vi" ? excerptVi : excerptEn, field: `excerpt.${lang}` },
+        { raw: lang === "vi" ? textVi    : textEn,    field: `content.${lang}.text` },
+        { raw: lang === "vi" ? excerptEn : excerptVi, field: `excerpt.${lang === "vi" ? "en" : "vi"}` },
+        { raw: lang === "vi" ? textEn    : textVi,    field: `content.${lang === "vi" ? "en" : "vi"}.text` },
+        { raw: titlePref,                                   field: "title" },
+      ];
+
+      let picked = sources[0];
+      if (reHi) {
+        const hit = sources.find((s) => s.raw && reHi.test(s.raw));
+        if (hit) picked = hit;
+      } else {
+        picked = sources[0].raw ? sources[0] : sources[4];
+      }
+
+      const snippet = makeSnippetForField(picked.raw || "", reHi);
+
+      // highlight tags (optional)
+      const tagsHighlighted = Array.isArray(d.tags)
+        ? d.tags.map((t) => (reHi ? highlightHTML(t, reHi) : escapeHtml(t)))
+        : [];
+
+      return {
+        _id: d._id,
+        slug: d.slug,
+        image: d.image,
+        tags: d.tags || [],
+        status: d.status,
+        publishedAt: d.publishedAt,
+        title: titlePref || "",
+        titleHighlighted,      // HTML (opt)
+        excerpt: (lang === "vi" ? excerptVi : excerptEn) || "",
+        snippet,               // HTML, luôn có
+        tagsHighlighted,       // HTML[], optional
+        // snippetField: picked.field, // bật nếu muốn debug nguồn
+      };
+    });
 
     res.json({
       page: pageNum,
@@ -240,13 +295,14 @@ export async function listBlogs(req, res, next) {
       pages: Math.ceil(total / limitNum),
       items,
       lang,
-      q: hasQuery ? q : undefined,
-      usedTextSearch: !!useText,
+      q: q || undefined,
+      usedTextSearch: false,
     });
-  } catch (e) {
-    next(e);
+  } catch (err) {
+    next(err);
   }
 }
+
 
 // ───────────── DETAIL: GET /api/blogs/:slug?lang=vi
 export async function getBlog(req, res, next) {
