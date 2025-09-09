@@ -1,12 +1,10 @@
 import Bot from "../models/Bot.js";
 
 /* —— utils i18n + highlight —— */
-const LANGS = ["vi", "en"];
-const normLang = (v) =>
-  LANGS.includes(String(v).toLowerCase()) ? String(v).toLowerCase() : "vi";
+const LANGS = ["vi","en"];
+const normLang = (v)=> LANGS.includes(String(v).toLowerCase()) ? String(v).toLowerCase() : "vi";
 const pickMap = (m = {}, lang = "vi") => {
-  const L = normLang(lang);
-  const O = L === "vi" ? "en" : "vi";
+  const L = normLang(lang); const O = L === "vi" ? "en" : "vi";
   const get = (obj, key) => (obj?.get ? obj.get(key) : obj?.[key]);
   return get(m, L) || get(m, O) || "";
 };
@@ -366,24 +364,25 @@ export async function getBotFacets(req, res, next) {
 /* ——— DETAIL ——— */
 export async function getBotBySlug(req, res, next) {
   try {
-    const lang = resolveLang(req);
-    const doc = await Bot.findOne({ slug: req.params.slug });
+    const lang = (req.query.lang || req.headers["x-lang"] || "vi")
+      .toString()
+      .toLowerCase();
+    const doc = await Bot.findOne({ slug: req.params.slug }).lean(); // <- thêm lean()
     if (!doc) return res.status(404).json({ message: "Bot not found" });
 
-    const json = doc.toObject({ versionKey: false });
     res.json({
-      ...json,
+      ...doc,
       resolved: {
         lang,
-        name: pickMap(json.name, lang),
-        title: pickMap(json.title, lang),
-        summary: pickMap(json.summary, lang),
-        description: pickMap(json.description, lang),
-        features: pickList(json.features, lang),
-        strengths: pickList(json.strengths, lang),
-        weaknesses: pickList(json.weaknesses, lang),
-        targetUsers: pickList(json.targetUsers, lang),
-        pricing: (json.pricing || []).map((p) => ({
+        name: pickMap(doc.name, lang),
+        title: pickMap(doc.title, lang),
+        summary: pickMap(doc.summary, lang),
+        description: pickMap(doc.description, lang),
+        features: pickList(doc.features, lang),
+        strengths: pickList(doc.strengths, lang),
+        weaknesses: pickList(doc.weaknesses, lang),
+        targetUsers: pickList(doc.targetUsers, lang),
+        pricing: (doc.pricing || []).map((p) => ({
           plan: p?.plan?.[lang] || p?.plan?.[lang === "vi" ? "en" : "vi"] || "",
           priceText:
             p?.priceText?.[lang] ||

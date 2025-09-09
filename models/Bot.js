@@ -1,20 +1,13 @@
 import mongoose from "mongoose";
 
 /* ---- i18n atom & coercers ---- */
-const Localized = new mongoose.Schema(
-  { vi: String, en: String },
-  { _id: false }
-);
-
-// ép 1 giá trị -> {vi,en}
+const LocalizedSub = { vi: String, en: String }; // <- dùng plain object
 const toLoc = (v) => {
   if (!v) return { vi: "", en: "" };
   if (typeof v === "object" && ("vi" in v || "en" in v)) return v;
   const s = String(v);
   return { vi: s, en: s };
 };
-
-// ép mảng -> mảng Localized
 const toLocList = (arr) => {
   if (!arr) return [];
   const a = Array.isArray(arr) ? arr : [arr];
@@ -25,8 +18,8 @@ const toLocList = (arr) => {
 
 const PricingTier = new mongoose.Schema(
   {
-    plan: { type: Localized, required: true },
-    priceText: { type: Localized, required: true },
+    plan: LocalizedSub, // <- dùng plain object
+    priceText: LocalizedSub,
     amount: Number,
     currency: { type: String, default: "USD" },
     interval: {
@@ -37,8 +30,6 @@ const PricingTier = new mongoose.Schema(
   },
   { _id: false }
 );
-
-// ép pricing (kể cả client gửi string/array mix)
 const coercePricing = (arr) => {
   if (!arr) return [];
   const a = Array.isArray(arr) ? arr : [arr];
@@ -68,13 +59,11 @@ const uniqueTags = (arr = []) => [
       .filter(Boolean)
   ),
 ];
-
 const flattenLocList = (list = []) =>
   (Array.isArray(list) ? list : [])
     .flatMap((x) => [x?.vi, x?.en])
     .filter(Boolean)
     .map(String);
-
 const buildKeywords = (doc) => {
   const set = new Set();
   uniqueTags(doc.tags).forEach((t) => set.add(t));
@@ -94,19 +83,19 @@ const buildKeywords = (doc) => {
 /* ---- schema ---- */
 const botSchema = new mongoose.Schema(
   {
-    // i18n text
-    name: { type: Map, of: String, required: true }, // {vi,en}
+    // i18n text (Map)
+    name: { type: Map, of: String, required: true },
     title: { type: Map, of: String },
     summary: { type: Map, of: String },
     description: { type: Map, of: String },
 
-    // i18n list (có setter ép sang Localized)
-    features: { type: [Localized], default: [], set: toLocList },
-    strengths: { type: [Localized], default: [], set: toLocList },
-    weaknesses: { type: [Localized], default: [], set: toLocList },
-    targetUsers: { type: [Localized], default: [], set: toLocList },
+    // i18n list (đã sửa kiểu)
+    features: { type: [LocalizedSub], default: [], set: toLocList },
+    strengths: { type: [LocalizedSub], default: [], set: toLocList },
+    weaknesses: { type: [LocalizedSub], default: [], set: toLocList },
+    targetUsers: { type: [LocalizedSub], default: [], set: toLocList },
 
-    // pricing i18n (có setter)
+    // pricing i18n
     pricing: { type: [PricingTier], default: [], set: coercePricing },
 
     // non-i18n
@@ -135,7 +124,7 @@ const botSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/* text index (quét cả list & pricing i18n) */
+/* text index giữ nguyên */
 botSchema.index(
   {
     "name.vi": "text",
@@ -191,7 +180,7 @@ botSchema.index(
   }
 );
 
-/* slug + chuẩn hoá */
+/* slug + chuẩn hoá + recompile */
 botSchema.methods.ensureUniqueSlug = async function () {
   const Model = this.constructor;
   const baseText =
@@ -201,13 +190,11 @@ botSchema.methods.ensureUniqueSlug = async function () {
   const base = toSlug(this.slug || baseText || String(this._id));
   let candidate = base || String(this._id);
   let i = 2;
-  // eslint-disable-next-line no-await-in-loop
   while (await Model.exists({ slug: candidate, _id: { $ne: this._id } })) {
     candidate = `${base}-${i++}`;
   }
   this.slug = candidate;
 };
-
 botSchema.pre("validate", async function (next) {
   if (!this.slug) await this.ensureUniqueSlug();
   this.tags = uniqueTags(this.tags);
@@ -218,11 +205,8 @@ botSchema.pre("validate", async function (next) {
   }
   next();
 });
-
-/* --- force recompile model (tránh dính schema cũ trong memory) --- */
 const MODEL = "Bot";
 try {
-  // nếu đã có, xoá rồi tạo lại để chắc chắn schema mới
   if (mongoose.modelNames().includes(MODEL)) {
     if (typeof mongoose.deleteModel === "function") mongoose.deleteModel(MODEL);
     else delete mongoose.connection.models[MODEL];
