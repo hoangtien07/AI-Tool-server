@@ -1,10 +1,27 @@
 import mongoose from "mongoose";
 
-/* i18n atom */
+/* ---- i18n atom & coercers ---- */
 const Localized = new mongoose.Schema(
   { vi: String, en: String },
   { _id: false }
 );
+
+// ép 1 giá trị -> {vi,en}
+const toLoc = (v) => {
+  if (!v) return { vi: "", en: "" };
+  if (typeof v === "object" && ("vi" in v || "en" in v)) return v;
+  const s = String(v);
+  return { vi: s, en: s };
+};
+
+// ép mảng -> mảng Localized
+const toLocList = (arr) => {
+  if (!arr) return [];
+  const a = Array.isArray(arr) ? arr : [arr];
+  return a
+    .filter((x) => x !== undefined && x !== null)
+    .map((x) => (typeof x === "string" ? { vi: x, en: x } : toLoc(x)));
+};
 
 const PricingTier = new mongoose.Schema(
   {
@@ -20,7 +37,21 @@ const PricingTier = new mongoose.Schema(
   },
   { _id: false }
 );
-/* helpers ngắn gọn */
+
+// ép pricing (kể cả client gửi string/array mix)
+const coercePricing = (arr) => {
+  if (!arr) return [];
+  const a = Array.isArray(arr) ? arr : [arr];
+  return a.map((p) => ({
+    plan: toLoc(p?.plan),
+    priceText: toLoc(p?.priceText),
+    amount: p?.amount,
+    currency: p?.currency ?? "USD",
+    interval: p?.interval ?? "month",
+  }));
+};
+
+/* ---- helpers ---- */
 const toSlug = (s = "") =>
   s
     .toString()
@@ -60,7 +91,7 @@ const buildKeywords = (doc) => {
   return Array.from(set).slice(0, 200);
 };
 
-/* schema */
+/* ---- schema ---- */
 const botSchema = new mongoose.Schema(
   {
     // i18n text
@@ -69,14 +100,14 @@ const botSchema = new mongoose.Schema(
     summary: { type: Map, of: String },
     description: { type: Map, of: String },
 
-    // i18n list
-    features: { type: [Localized], default: [] },
-    strengths: { type: [Localized], default: [] },
-    weaknesses: { type: [Localized], default: [] },
-    targetUsers: { type: [Localized], default: [] },
+    // i18n list (có setter ép sang Localized)
+    features: { type: [Localized], default: [], set: toLocList },
+    strengths: { type: [Localized], default: [], set: toLocList },
+    weaknesses: { type: [Localized], default: [], set: toLocList },
+    targetUsers: { type: [Localized], default: [], set: toLocList },
 
-    // pricing i18n
-    pricing: { type: [PricingTier], default: [] },
+    // pricing i18n (có setter)
+    pricing: { type: [PricingTier], default: [], set: coercePricing },
 
     // non-i18n
     slug: { type: String, required: true, unique: true, index: true },
@@ -88,9 +119,11 @@ const botSchema = new mongoose.Schema(
     foundedYear: Number,
     category: { type: String, index: true },
     tags: { type: [String], default: [] },
+
     views: { type: Number, default: 0, index: true },
     clicks: { type: Number, default: 0 },
     searchKeywords: { type: [String], default: [] },
+
     seo: {
       title: String,
       description: String,
@@ -102,7 +135,7 @@ const botSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/* text index (duy nhất) */
+/* text index (quét cả list & pricing i18n) */
 botSchema.index(
   {
     "name.vi": "text",
@@ -113,7 +146,6 @@ botSchema.index(
     "summary.en": "text",
     "description.vi": "text",
     "description.en": "text",
-
     "features.vi": "text",
     "features.en": "text",
     "strengths.vi": "text",
@@ -122,12 +154,10 @@ botSchema.index(
     "weaknesses.en": "text",
     "targetUsers.vi": "text",
     "targetUsers.en": "text",
-
     "pricing.plan.vi": "text",
     "pricing.plan.en": "text",
     "pricing.priceText.vi": "text",
     "pricing.priceText.en": "text",
-
     tags: "text",
     searchKeywords: "text",
   },
@@ -142,7 +172,6 @@ botSchema.index(
       "summary.en": 6,
       "description.vi": 4,
       "description.en": 4,
-
       "features.vi": 3,
       "features.en": 3,
       "strengths.vi": 3,
@@ -151,12 +180,10 @@ botSchema.index(
       "weaknesses.en": 2,
       "targetUsers.vi": 2,
       "targetUsers.en": 2,
-
       "pricing.plan.vi": 2,
       "pricing.plan.en": 2,
       "pricing.priceText.vi": 2,
       "pricing.priceText.en": 2,
-
       tags: 2,
       searchKeywords: 2,
     },
@@ -164,7 +191,7 @@ botSchema.index(
   }
 );
 
-/* slug duy nhất từ title/name */
+/* slug + chuẩn hoá */
 botSchema.methods.ensureUniqueSlug = async function () {
   const Model = this.constructor;
   const baseText =
@@ -181,7 +208,6 @@ botSchema.methods.ensureUniqueSlug = async function () {
   this.slug = candidate;
 };
 
-/* chuẩn hoá */
 botSchema.pre("validate", async function (next) {
   if (!this.slug) await this.ensureUniqueSlug();
   this.tags = uniqueTags(this.tags);
@@ -193,6 +219,13 @@ botSchema.pre("validate", async function (next) {
   next();
 });
 
-/* tránh OverwriteModelError */
-const Bot = mongoose.models.Bot ?? mongoose.model("Bot", botSchema);
-export default Bot;
+/* --- force recompile model (tránh dính schema cũ trong memory) --- */
+const MODEL = "Bot";
+try {
+  // nếu đã có, xoá rồi tạo lại để chắc chắn schema mới
+  if (mongoose.modelNames().includes(MODEL)) {
+    if (typeof mongoose.deleteModel === "function") mongoose.deleteModel(MODEL);
+    else delete mongoose.connection.models[MODEL];
+  }
+} catch {}
+export default mongoose.model(MODEL, botSchema);
