@@ -15,7 +15,6 @@ import authRoutes from "./routes/authRoutes.js";
 import blogRoutes from "./routes/blogRoutes.js";
 import botRoutes from "./routes/botRoutes.js";
 import searchRoutes from "./routes/searchRoutes.js";
-import Blog from "./models/Blog.js";
 
 dotenv.config();
 
@@ -23,13 +22,17 @@ const app = express();
 
 connectDB();
 
-// Tạo text index
-// import Bot from "./models/bot.js";
-// import Blog from "./models/blog.js";
-// await Bot.createCollection();
-// await Blog.createCollection();
-// await Bot.syncIndexes();
-// await Blog.syncIndexes()
+/*
+ * One-time index creation.
+ * Uncomment this block, run the server once, then comment it out again.
+ * This ensures your MongoDB text indexes are built for fast search.
+ */
+// (async () => {
+//   console.log("Syncing MongoDB indexes...");
+//   await Bot.syncIndexes();
+//   await Blog.syncIndexes(); // Also sync blog indexes for better performance
+//   console.log("Finished syncing indexes.");
+// })();
 
 // CORS: cho phép gọi từ FE domain
 const allow = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim());

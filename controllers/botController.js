@@ -1,10 +1,12 @@
 import Bot from "../models/Bot.js";
 
 /* —— utils i18n + highlight —— */
-const LANGS = ["vi","en"];
-const normLang = (v)=> LANGS.includes(String(v).toLowerCase()) ? String(v).toLowerCase() : "vi";
+const LANGS = ["vi", "en"];
+const normLang = (v) =>
+  LANGS.includes(String(v).toLowerCase()) ? String(v).toLowerCase() : "vi";
 const pickMap = (m = {}, lang = "vi") => {
-  const L = normLang(lang); const O = L === "vi" ? "en" : "vi";
+  const L = normLang(lang);
+  const O = L === "vi" ? "en" : "vi";
   const get = (obj, key) => (obj?.get ? obj.get(key) : obj?.[key]);
   return get(m, L) || get(m, O) || "";
 };
@@ -154,8 +156,7 @@ export async function createBot(req, res, next) {
   }
 }
 
-
-/* ——— LIST + SEARCH + HIGHLIGHT ——— */
+// controllers/botController.js — REPLACE listBots
 export async function listBots(req, res, next) {
   try {
     const lang = resolveLang(req);
@@ -172,43 +173,14 @@ export async function listBots(req, res, next) {
     const reMongo = q ? qToRegex(q, "i") : null;
     const reHi = q ? qToRegex(q, "ig") : null;
 
-    const filter = {};
-    if (status) filter.status = status;
-    if (tag) filter.tags = tag;
-    if (category) filter.category = category;
-    if (reMongo) {
-      filter.$or = [
-        { "name.vi": { $regex: reMongo } },
-        { "name.en": { $regex: reMongo } },
-        { "title.vi": { $regex: reMongo } },
-        { "title.en": { $regex: reMongo } },
-        { "summary.vi": { $regex: reMongo } },
-        { "summary.en": { $regex: reMongo } },
-        { "description.vi": { $regex: reMongo } },
-        { "description.en": { $regex: reMongo } },
-
-        { "features.vi": { $regex: reMongo } },
-        { "features.en": { $regex: reMongo } },
-        { "strengths.vi": { $regex: reMongo } },
-        { "strengths.en": { $regex: reMongo } },
-        { "weaknesses.vi": { $regex: reMongo } },
-        { "weaknesses.en": { $regex: reMongo } },
-        { "targetUsers.vi": { $regex: reMongo } },
-        { "targetUsers.en": { $regex: reMongo } },
-
-        { "pricing.plan.vi": { $regex: reMongo } },
-        { "pricing.plan.en": { $regex: reMongo } },
-        { "pricing.priceText.vi": { $regex: reMongo } },
-        { "pricing.priceText.en": { $regex: reMongo } },
-
-        { tags: { $regex: reMongo } },
-      ];
-    }
+    const base = {};
+    if (status) base.status = status;
+    if (tag) base.tags = tag;
+    if (category) base.category = category;
 
     const pageNum =
       skip !== undefined
-        ? Math.floor((parseInt(skip, 10) || 0) / (parseInt(limit, 10) || 12)) +
-          1
+        ? Math.floor((parseInt(skip, 10) || 0) / (parseInt(limit, 10) || 12)) + 1
         : Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 12, 1), 100);
     const offset =
@@ -216,15 +188,68 @@ export async function listBots(req, res, next) {
         ? Math.max(parseInt(skip, 10) || 0, 0)
         : (pageNum - 1) * limitNum;
 
-    const [total, docs] = await Promise.all([
-      Bot.countDocuments(filter),
-      Bot.find(filter)
-        .sort("-views -updatedAt")
-        .skip(offset)
-        .limit(limitNum)
-        .lean(),
-    ]);
+    let usedTextSearch = false;
+    let total = 0;
+    let docs = [];
 
+    // 1) ƯU TIÊN: $text (đúng nghĩa "full-text search") nếu có q
+    if (q) {
+      try {
+        const textFilter = { ...base, $text: { $search: q } };
+        [total, docs] = await Promise.all([
+          Bot.countDocuments(textFilter),
+          Bot.find(textFilter, { score: { $meta: "textScore" } })
+            .sort({ score: { $meta: "textScore" }, views: -1, updatedAt: -1 })
+            .skip(offset)
+            .limit(limitNum)
+            .lean(),
+        ]);
+        usedTextSearch = true;
+      } catch (_) {
+        // có thể chưa build index -> fallback ở bước 2
+      }
+    }
+
+    // 2) FALLBACK: Regex i18n nếu chưa dùng/không dùng được $text
+    if (!usedTextSearch) {
+      const filter = { ...base };
+      if (reMongo) {
+        filter.$or = [
+          { "name.vi": { $regex: reMongo } },
+          { "name.en": { $regex: reMongo } },
+          { "title.vi": { $regex: reMongo } },
+          { "title.en": { $regex: reMongo } },
+          { "summary.vi": { $regex: reMongo } },
+          { "summary.en": { $regex: reMongo } },
+          { "description.vi": { $regex: reMongo } },
+          { "description.en": { $regex: reMongo } },
+          { "features.vi": { $regex: reMongo } },
+          { "features.en": { $regex: reMongo } },
+          { "strengths.vi": { $regex: reMongo } },
+          { "strengths.en": { $regex: reMongo } },
+          { "weaknesses.vi": { $regex: reMongo } },
+          { "weaknesses.en": { $regex: reMongo } },
+          { "targetUsers.vi": { $regex: reMongo } },
+          { "targetUsers.en": { $regex: reMongo } },
+          { "pricing.plan.vi": { $regex: reMongo } },
+          { "pricing.plan.en": { $regex: reMongo } },
+          { "pricing.priceText.vi": { $regex: reMongo } },
+          { "pricing.priceText.en": { $regex: reMongo } },
+          { tags: { $regex: reMongo } },
+        ];
+      }
+
+      [total, docs] = await Promise.all([
+        Bot.countDocuments(filter),
+        Bot.find(filter)
+          .sort("-views -updatedAt")
+          .skip(offset)
+          .limit(limitNum)
+          .lean(),
+      ]);
+    }
+
+    // map kết quả (giữ logic highlight/snippet như cũ)
     const items = docs.map((d) => {
       const namePref = pickMap(d.name, lang);
       const titlePref = pickMap(d.title, lang);
@@ -249,7 +274,6 @@ export async function listBots(req, res, next) {
         .filter(Boolean)
         .join(" • ");
 
-      /* ưu tiên snippet theo trường nào match */
       const sources = [
         { raw: sumPref, field: `summary.${lang}` },
         { raw: descPref, field: `description.${lang}` },
@@ -266,16 +290,9 @@ export async function listBots(req, res, next) {
         sources[7];
 
       const nameHighlighted =
-        reHi && namePref && reHi.test(namePref)
-          ? hi(namePref, reHi)
-          : undefined;
+        reHi && namePref && reHi.test(namePref) ? hi(namePref, reHi) : undefined;
       const titleHighlighted =
-        reHi && titlePref && reHi.test(titlePref)
-          ? hi(titlePref, reHi)
-          : undefined;
-      const tagsHighlighted = Array.isArray(d.tags)
-        ? d.tags.map((t) => (reHi ? hi(t, reHi) : escHtml(t)))
-        : [];
+        reHi && titlePref && reHi.test(titlePref) ? hi(titlePref, reHi) : undefined;
 
       return {
         _id: d._id,
@@ -283,7 +300,6 @@ export async function listBots(req, res, next) {
         image: d.image,
         category: d.category,
         tags: d.tags || [],
-        tagsHighlighted,
         views: d.views,
         clicks: d.clicks,
         status: d.status,
@@ -306,11 +322,13 @@ export async function listBots(req, res, next) {
       items,
       lang,
       q: q || undefined,
+      usedTextSearch,
     });
   } catch (e) {
     next(e);
   }
 }
+
 
 /* ——— FACETS ——— */
 export async function getBotFacets(req, res, next) {

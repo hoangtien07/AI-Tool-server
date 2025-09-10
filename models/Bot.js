@@ -1,24 +1,11 @@
+// models/Bot.js
 import mongoose from "mongoose";
 
-/* ---- i18n atom & coercers ---- */
-const LocalizedSub = { vi: String, en: String }; // <- dùng plain object
-const toLoc = (v) => {
-  if (!v) return { vi: "", en: "" };
-  if (typeof v === "object" && ("vi" in v || "en" in v)) return v;
-  const s = String(v);
-  return { vi: s, en: s };
-};
-const toLocList = (arr) => {
-  if (!arr) return [];
-  const a = Array.isArray(arr) ? arr : [arr];
-  return a
-    .filter((x) => x !== undefined && x !== null)
-    .map((x) => (typeof x === "string" ? { vi: x, en: x } : toLoc(x)));
-};
+const LocalizedSub = { vi: String, en: String };
 
 const PricingTier = new mongoose.Schema(
   {
-    plan: LocalizedSub, // <- dùng plain object
+    plan: LocalizedSub,
     priceText: LocalizedSub,
     amount: Number,
     currency: { type: String, default: "USD" },
@@ -30,19 +17,7 @@ const PricingTier = new mongoose.Schema(
   },
   { _id: false }
 );
-const coercePricing = (arr) => {
-  if (!arr) return [];
-  const a = Array.isArray(arr) ? arr : [arr];
-  return a.map((p) => ({
-    plan: toLoc(p?.plan),
-    priceText: toLoc(p?.priceText),
-    amount: p?.amount,
-    currency: p?.currency ?? "USD",
-    interval: p?.interval ?? "month",
-  }));
-};
 
-/* ---- helpers ---- */
 const toSlug = (s = "") =>
   s
     .toString()
@@ -52,6 +27,26 @@ const toSlug = (s = "") =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+const toLoc = (v) => {
+  if (!v) return { vi: "", en: "" };
+  if (typeof v === "object" && ("vi" in v || "en" in v)) return v;
+  const s = String(v);
+  return { vi: s, en: s };
+};
+const toLocList = (arr) =>
+  (Array.isArray(arr) ? arr : [arr])
+    .filter((x) => x !== undefined && x !== null)
+    .map((x) => (typeof x === "string" ? { vi: x, en: x } : toLoc(x)));
+
+const coercePricing = (arr) =>
+  (Array.isArray(arr) ? arr : [arr]).map((p) => ({
+    plan: toLoc(p?.plan),
+    priceText: toLoc(p?.priceText),
+    amount: p?.amount,
+    currency: p?.currency ?? "USD",
+    interval: p?.interval ?? "month",
+  }));
+
 const uniqueTags = (arr = []) => [
   ...new Set(
     (Array.isArray(arr) ? arr : [])
@@ -59,43 +54,22 @@ const uniqueTags = (arr = []) => [
       .filter(Boolean)
   ),
 ];
-const flattenLocList = (list = []) =>
-  (Array.isArray(list) ? list : [])
-    .flatMap((x) => [x?.vi, x?.en])
-    .filter(Boolean)
-    .map(String);
-const buildKeywords = (doc) => {
-  const set = new Set();
-  uniqueTags(doc.tags).forEach((t) => set.add(t));
-  flattenLocList(doc.features).forEach((v) => set.add(v));
-  flattenLocList(doc.strengths).forEach((v) => set.add(v));
-  flattenLocList(doc.weaknesses).forEach((v) => set.add(v));
-  flattenLocList(doc.targetUsers).forEach((v) => set.add(v));
-  (doc.pricing || []).forEach((p) => {
-    if (p?.plan?.vi) set.add(p.plan.vi);
-    if (p?.plan?.en) set.add(p.plan.en);
-    if (p?.priceText?.vi) set.add(p.priceText.vi);
-    if (p?.priceText?.en) set.add(p.priceText.en);
-  });
-  return Array.from(set).slice(0, 200);
-};
 
-/* ---- schema ---- */
 const botSchema = new mongoose.Schema(
   {
-    // i18n text (Map)
+    // i18n text
     name: { type: Map, of: String, required: true },
     title: { type: Map, of: String },
     summary: { type: Map, of: String },
     description: { type: Map, of: String },
 
-    // i18n list (đã sửa kiểu)
+    // i18n lists
     features: { type: [LocalizedSub], default: [], set: toLocList },
     strengths: { type: [LocalizedSub], default: [], set: toLocList },
     weaknesses: { type: [LocalizedSub], default: [], set: toLocList },
     targetUsers: { type: [LocalizedSub], default: [], set: toLocList },
 
-    // pricing i18n
+    // pricing
     pricing: { type: [PricingTier], default: [], set: coercePricing },
 
     // non-i18n
@@ -111,7 +85,6 @@ const botSchema = new mongoose.Schema(
 
     views: { type: Number, default: 0, index: true },
     clicks: { type: Number, default: 0 },
-    searchKeywords: { type: [String], default: [] },
 
     seo: {
       title: String,
@@ -124,7 +97,6 @@ const botSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-/* text index giữ nguyên */
 botSchema.index(
   {
     "name.vi": "text",
@@ -148,10 +120,10 @@ botSchema.index(
     "pricing.priceText.vi": "text",
     "pricing.priceText.en": "text",
     tags: "text",
-    searchKeywords: "text",
   },
   {
     name: "bot_text_idx",
+    default_language: "english",
     weights: {
       "name.vi": 10,
       "name.en": 10,
@@ -174,13 +146,10 @@ botSchema.index(
       "pricing.priceText.vi": 2,
       "pricing.priceText.en": 2,
       tags: 2,
-      searchKeywords: 2,
     },
-    default_language: "english",
   }
 );
 
-/* slug + chuẩn hoá + recompile */
 botSchema.methods.ensureUniqueSlug = async function () {
   const Model = this.constructor;
   const baseText =
@@ -195,16 +164,17 @@ botSchema.methods.ensureUniqueSlug = async function () {
   }
   this.slug = candidate;
 };
+
 botSchema.pre("validate", async function (next) {
   if (!this.slug) await this.ensureUniqueSlug();
   this.tags = uniqueTags(this.tags);
-  this.searchKeywords = buildKeywords(this);
   if (typeof this.foundedYear === "string") {
     const n = Number(this.foundedYear);
     if (!Number.isNaN(n)) this.foundedYear = n;
   }
   next();
 });
+
 const MODEL = "Bot";
 try {
   if (mongoose.modelNames().includes(MODEL)) {

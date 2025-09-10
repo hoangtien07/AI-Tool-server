@@ -1,38 +1,62 @@
+// controllers/searchController.js — FULL REPLACEMENT
 import Bot from "../models/Bot.js";
 import Blog from "../models/Blog.js";
 
-/* ===== helpers ===== */
-const esc = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const toRx = (q) => new RegExp(`(${esc(q.trim())})`, "i"); // partial, case-insensitive
+/* ===== utils ===== */
+const escHtml = (s = "") =>
+  String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+const escRe = (s = "") => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const toRegex = (q, flags = "i") => {
+  const parts = (String(q).match(/"([^"]+)"|(\S+)/g) || [])
+    .map((x) => x.replaceAll('"', ""))
+    .map(escRe)
+    .filter(Boolean);
+  return parts.length ? new RegExp("(" + parts.join("|") + ")", flags) : null;
+};
+const hi = (raw = "", re) =>
+  re ? escHtml(raw).replace(re, "<mark>$1</mark>") : escHtml(raw);
+const makeSnippet = (raw = "", re, max = 160) => {
+  if (!raw) return "";
+  if (!re) return escHtml(raw.length > max ? raw.slice(0, max) + "…" : raw);
+  const i = raw.search(re);
+  if (i < 0) return escHtml(raw.length > max ? raw.slice(0, max) + "…" : raw);
+  const start = Math.max(0, i - Math.floor((max - 1) / 2));
+  const end = Math.min(raw.length, start + max);
+  const slice = raw.slice(start, end);
+  return (start > 0 ? "…" : "") + hi(slice, re) + (end < raw.length ? "…" : "");
+};
+const LANGS = ["vi", "en"];
+const normLang = (v) =>
+  LANGS.includes(String(v).toLowerCase()) ? String(v).toLowerCase() : "vi";
+const pickMap = (m = {}, lang = "vi") => {
+  const L = normLang(lang);
+  const O = L === "vi" ? "en" : "vi";
+  const get = (obj, key) => (obj?.get ? obj.get(key) : obj?.[key]);
+  return get(m, L) || get(m, O) || "";
+};
+const pickList = (list = [], lang = "vi") =>
+  (Array.isArray(list) ? list : [])
+    .map((x) => x?.[lang] ?? x?.[lang === "vi" ? "en" : "vi"] ?? "")
+    .filter(Boolean);
+const resolveLang = (req) => {
+  const q = String(req.query.lang || "").toLowerCase();
+  if (q === "en") return "en";
+  if (q === "vi") return "vi";
+  const h = String(req.headers["accept-language"] || "").toLowerCase();
+  return h.startsWith("en") ? "en" : "vi";
+};
 
-function snippet(text, rx, max = 160) {
-  if (!text) return null;
-  const m = text.match(rx);
-  if (!m) return null;
-  const i = m.index ?? 0;
-  const start = Math.max(0, i - Math.floor((max - m[0].length) / 2));
-  const end = Math.min(text.length, start + max);
-  let s = text.slice(start, end);
-  s = s.replace(rx, "<mark>$1</mark>");
-  return (start > 0 ? "…" : "") + s + (end < text.length ? "…" : "");
-}
-
-function matchedFields(doc, rx, fields) {
-  const out = new Set();
-  for (const f of fields) {
-    const v = doc[f];
-    if (typeof v === "string" && rx.test(v)) out.add(f);
-    if (Array.isArray(v) && v.some((x) => rx.test(String(x)))) out.add(f);
-  }
-  return [...out];
-}
-
-/* ===== search helpers for each collection ===== */
-async function searchBots(q, skip = 0, limit = 5) {
+/* ===== BOT SEARCH ===== */
+async function searchBots(q, lang, skip = 0, limit = 5) {
   const base = { status: { $ne: "inactive" } };
-  const rx = toRx(q);
+  const re = toRegex(q, "ig");
 
-  // 1) full-text ưu tiên (độ liên quan)
+  // 1) full-text
   let textItems = [],
     totalText = 0;
   try {
@@ -42,57 +66,104 @@ async function searchBots(q, skip = 0, limit = 5) {
     )
       .sort({ score: { $meta: "textScore" }, views: -1 })
       .skip(Number(skip))
-      .limit(Number(limit));
+      .limit(Number(limit))
+      .lean();
     totalText = await Bot.countDocuments({ ...base, $text: { $search: q } });
-  } catch (_) {
-    /* nếu chưa có text index thì bỏ qua */
-  }
+  } catch (_) {}
 
-  // 2) fallback partial (regex) cho tìm chuỗi con
+  // 2) fallback regex i18n
   const regexFilter = {
     ...base,
     $or: [
-      { name: rx },
-      { summary: rx },
-      { description: rx },
-      { tags: { $elemMatch: { $regex: rx } } },
-      { features: { $elemMatch: { $regex: rx } } },
+      { "name.vi": { $regex: re } },
+      { "name.en": { $regex: re } },
+      { "title.vi": { $regex: re } },
+      { "title.en": { $regex: re } },
+      { "summary.vi": { $regex: re } },
+      { "summary.en": { $regex: re } },
+      { "description.vi": { $regex: re } },
+      { "description.en": { $regex: re } },
+      { "features.vi": { $regex: re } },
+      { "features.en": { $regex: re } },
+      { "strengths.vi": { $regex: re } },
+      { "strengths.en": { $regex: re } },
+      { "weaknesses.vi": { $regex: re } },
+      { "weaknesses.en": { $regex: re } },
+      { "targetUsers.vi": { $regex: re } },
+      { "targetUsers.en": { $regex: re } },
+      { "pricing.plan.vi": { $regex: re } },
+      { "pricing.plan.en": { $regex: re } },
+      { "pricing.priceText.vi": { $regex: re } },
+      { "pricing.priceText.en": { $regex: re } },
+      { tags: { $regex: re } },
     ],
   };
   const regexItems = await Bot.find(regexFilter)
     .sort("-views")
-    .limit(Number(limit) * 2);
+    .limit(Number(limit) * 2)
+    .lean();
 
-  // 3) gộp + map ra cấu trúc kết quả
+  // 3) hợp nhất + map
   const map = new Map();
   [...textItems, ...regexItems].forEach((d) => map.set(String(d._id), d));
+
   const items = Array.from(map.values())
     .slice(0, Number(limit))
-    .map((d) => ({
-      _id: String(d._id),
-      type: "bot",
-      name: d.name,
-      slug: d.slug,
-      image: d.image,
-      views: d.views,
-      snippet: snippet(d.summary || d.description || d.name, rx) || "",
-      matchIn: matchedFields(d, rx, [
-        "name",
-        "summary",
-        "description",
-        "tags",
-        "features",
-      ]),
-    }));
+    .map((d) => {
+      const namePref = pickMap(d.name, lang);
+      const titlePref = pickMap(d.title, lang);
+      const sumPref = pickMap(d.summary, lang);
+      const descPref = pickMap(d.description, lang);
+      const featuresTxt = pickList(d.features, lang).join(" • ");
+      const strengthsTxt = pickList(d.strengths, lang).join(" • ");
+      const weaknessesTxt = pickList(d.weaknesses, lang).join(" • ");
+      const targetUsersTxt = pickList(d.targetUsers, lang).join(" • ");
+      const pricingTxt = (d.pricing || [])
+        .map((p) => {
+          const plan =
+            p?.plan?.[lang] || p?.plan?.[lang === "vi" ? "en" : "vi"] || "";
+          const price =
+            p?.priceText?.[lang] ||
+            p?.priceText?.[lang === "vi" ? "en" : "vi"] ||
+            "";
+          return plan && price ? `${plan} — ${price}` : plan || price;
+        })
+        .filter(Boolean)
+        .join(" • ");
+
+      const sources = [
+        sumPref,
+        descPref,
+        featuresTxt,
+        strengthsTxt,
+        weaknessesTxt,
+        targetUsersTxt,
+        pricingTxt,
+        titlePref || namePref,
+      ].filter(Boolean);
+      const chosen =
+        sources.find((s) => re && s && re.test(s)) || sources[0] || "";
+
+      return {
+        _id: String(d._id),
+        type: "bot",
+        name: namePref || titlePref || "",
+        slug: d.slug,
+        image: d.image,
+        views: d.views,
+        snippet: makeSnippet(chosen, re) || "",
+      };
+    });
 
   const totalRegex = await Bot.countDocuments(regexFilter).catch(() => 0);
   return { total: Math.max(totalText, totalRegex), items };
 }
 
-async function searchBlogs(q, skip = 0, limit = 5) {
-  const rx = toRx(q);
+/* ===== BLOG SEARCH (i18n theo Blog controller hiện tại) ===== */
+async function searchBlogs(q, lang, skip = 0, limit = 5) {
+  const re = toRegex(q, "ig");
 
-  // full-text
+  // 1) thử $text nếu bạn có index cho Blog (an toàn try/catch)
   let textItems = [],
     totalText = 0;
   try {
@@ -100,45 +171,69 @@ async function searchBlogs(q, skip = 0, limit = 5) {
       { $text: { $search: q } },
       { score: { $meta: "textScore" } }
     )
-      .sort({ score: { $meta: "textScore" }, views: -1 })
+      .sort({ score: { $meta: "textScore" }, publishedAt: -1 })
       .skip(Number(skip))
-      .limit(Number(limit));
+      .limit(Number(limit))
+      .lean();
     totalText = await Blog.countDocuments({ $text: { $search: q } });
   } catch (_) {}
 
-  // fallback partial (title/content/tags)
+  // 2) regex fallback theo cấu trúc i18n: title/excerpt/content + tags
   const regexFilter = {
     $or: [
-      { title: rx },
-      { content: rx },
-      { tags: { $elemMatch: { $regex: rx } } },
+      { "title.vi": { $regex: re } },
+      { "title.en": { $regex: re } },
+      { "excerpt.vi": { $regex: re } },
+      { "excerpt.en": { $regex: re } },
+      { "content.vi.text": { $regex: re } },
+      { "content.en.text": { $regex: re } },
+      { tags: { $regex: re } },
     ],
   };
   const regexItems = await Blog.find(regexFilter)
-    .sort("-views")
-    .limit(Number(limit) * 2);
+    .sort("-publishedAt")
+    .limit(Number(limit) * 2)
+    .lean();
 
   const map = new Map();
   [...textItems, ...regexItems].forEach((d) => map.set(String(d._id), d));
+
   const items = Array.from(map.values())
     .slice(0, Number(limit))
-    .map((d) => ({
-      _id: String(d._id),
-      type: "blog",
-      title: d.title,
-      slug: d._id, // nếu bạn có slug cho blog thì trả slug ở đây
-      image: d.image,
-      views: d.views,
-      snippet:
-        snippet((d.content || d.title).replace(/<[^>]*>/g, " "), rx) || "",
-      matchIn: matchedFields(d, rx, ["title", "content", "tags"]),
-    }));
+    .map((d) => {
+      const titleL =
+        lang === "vi"
+          ? d?.title?.vi || d?.title?.en
+          : d?.title?.en || d?.title?.vi;
+      const excerptL =
+        lang === "vi"
+          ? d?.excerpt?.vi || d?.excerpt?.en
+          : d?.excerpt?.en || d?.excerpt?.vi;
+      const textL =
+        lang === "vi"
+          ? d?.content?.vi?.text || d?.content?.en?.text
+          : d?.content?.en?.text || d?.content?.vi?.text;
+
+      const sources = [excerptL, textL, titleL].filter(Boolean);
+      const chosen =
+        sources.find((s) => re && s && re.test(s)) || sources[0] || "";
+
+      return {
+        _id: String(d._id),
+        type: "blog",
+        title: titleL || "",
+        slug: d.slug || String(d._id),
+        image: d.image,
+        views: d.views,
+        snippet: makeSnippet(chosen, re) || "",
+      };
+    });
 
   const totalRegex = await Blog.countDocuments(regexFilter).catch(() => 0);
   return { total: Math.max(totalText, totalRegex), items };
 }
 
-/* ===== main controller: /api/search ===== */
+/* ===== /api/search ===== */
 export async function globalSearch(req, res, next) {
   try {
     const q = (req.query.q || "").trim();
@@ -147,20 +242,22 @@ export async function globalSearch(req, res, next) {
     const limitBlogs = Number(req.query.limitBlogs || 5);
     const skipBots = Number(req.query.skipBots || 0);
     const skipBlogs = Number(req.query.skipBlogs || 0);
+    const lang = resolveLang(req);
 
     if (!q) return res.status(400).json({ message: "q is required" });
 
     const [bots, blogs] = await Promise.all([
       tab === "blogs"
         ? { total: 0, items: [] }
-        : searchBots(q, skipBots, limitBots),
+        : searchBots(q, lang, skipBots, limitBots),
       tab === "bots"
         ? { total: 0, items: [] }
-        : searchBlogs(q, skipBlogs, limitBlogs),
+        : searchBlogs(q, lang, skipBlogs, limitBlogs),
     ]);
 
     res.json({
       query: q,
+      lang,
       counts: { bots: bots.total, blogs: blogs.total },
       tabs: { bots: bots.items, blogs: blogs.items },
     });

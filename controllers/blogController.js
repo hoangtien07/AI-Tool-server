@@ -267,10 +267,6 @@ export async function listBlogs(req, res, next) {
 
       const snippet = makeSnippetForField(picked.raw || "", reHi);
 
-      // highlight tags (optional)
-      const tagsHighlighted = Array.isArray(d.tags)
-        ? d.tags.map((t) => (reHi ? highlightHTML(t, reHi) : escapeHtml(t)))
-        : [];
 
       return {
         _id: d._id,
@@ -283,7 +279,6 @@ export async function listBlogs(req, res, next) {
         titleHighlighted,      // HTML (opt)
         excerpt: (lang === "vi" ? excerptVi : excerptEn) || "",
         snippet,               // HTML, luôn có
-        tagsHighlighted,       // HTML[], optional
         // snippetField: picked.field, // bật nếu muốn debug nguồn
       };
     });
