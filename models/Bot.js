@@ -80,7 +80,20 @@ const botSchema = new mongoose.Schema(
     originUrl: String,
     headquarters: String,
     foundedYear: Number,
-    category: { type: String, index: true },
+    category: {
+      type: String,
+      enum: [
+        "customer-support",
+        "ai-education",
+        "office-ai",
+        "growth-marketing",
+        "writing-editing",
+        "technology-it",
+        "design-creative",
+        "workflow-automation",
+      ],
+      index: true,
+    },
     tags: { type: [String], default: [] },
 
     views: { type: Number, default: 0, index: true },

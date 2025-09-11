@@ -1,8 +1,8 @@
-// controllers/searchController.js — FULL REPLACEMENT
+// controllers/searchController.js — DROP-IN
 import Bot from "../models/Bot.js";
 import Blog from "../models/Blog.js";
 
-/* ===== utils ===== */
+/* ============ utils ============ */
 const escHtml = (s = "") =>
   String(s)
     .replace(/&/g, "&amp;")
@@ -27,9 +27,13 @@ const makeSnippet = (raw = "", re, max = 160) => {
   if (i < 0) return escHtml(raw.length > max ? raw.slice(0, max) + "…" : raw);
   const start = Math.max(0, i - Math.floor((max - 1) / 2));
   const end = Math.min(raw.length, start + max);
-  const slice = raw.slice(start, end);
-  return (start > 0 ? "…" : "") + hi(slice, re) + (end < raw.length ? "…" : "");
+  return (
+    (start > 0 ? "…" : "") +
+    hi(raw.slice(start, end), re) +
+    (end < raw.length ? "…" : "")
+  );
 };
+
 const LANGS = ["vi", "en"];
 const normLang = (v) =>
   LANGS.includes(String(v).toLowerCase()) ? String(v).toLowerCase() : "vi";
@@ -51,27 +55,32 @@ const resolveLang = (req) => {
   return h.startsWith("en") ? "en" : "vi";
 };
 
-/* ===== BOT SEARCH ===== */
-async function searchBots(q, lang, skip = 0, limit = 5) {
+/* ============ BOT SEARCH ============ */
+async function searchBots(q, lang, skip = 0, limit = 5, categoryRaw = "") {
+  const cats = String(categoryRaw)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   const base = { status: { $ne: "inactive" } };
+  if (cats.length) base.category = { $in: cats }; 
+
   const re = toRegex(q, "ig");
 
   // 1) full-text
-  let textItems = [],
-    totalText = 0;
+  let textItems = [];
+  let totalText = 0;
   try {
-    textItems = await Bot.find(
-      { ...base, $text: { $search: q } },
-      { score: { $meta: "textScore" } }
-    )
+    const textFilter = { ...base, $text: { $search: q } };
+    textItems = await Bot.find(textFilter, { score: { $meta: "textScore" } })
       .sort({ score: { $meta: "textScore" }, views: -1 })
       .skip(Number(skip))
       .limit(Number(limit))
       .lean();
-    totalText = await Bot.countDocuments({ ...base, $text: { $search: q } });
+    totalText = await Bot.countDocuments(textFilter);
   } catch (_) {}
 
-  // 2) fallback regex i18n
+  // 2) regex i18n
   const regexFilter = {
     ...base,
     $or: [
@@ -103,7 +112,7 @@ async function searchBots(q, lang, skip = 0, limit = 5) {
     .limit(Number(limit) * 2)
     .lean();
 
-  // 3) hợp nhất + map
+  // 3) Hợp nhất (ưu tiên full-text), map sang dạng FE
   const map = new Map();
   [...textItems, ...regexItems].forEach((d) => map.set(String(d._id), d));
 
@@ -159,13 +168,13 @@ async function searchBots(q, lang, skip = 0, limit = 5) {
   return { total: Math.max(totalText, totalRegex), items };
 }
 
-/* ===== BLOG SEARCH (i18n theo Blog controller hiện tại) ===== */
+/* ============ BLOG SEARCH ============ */
 async function searchBlogs(q, lang, skip = 0, limit = 5) {
   const re = toRegex(q, "ig");
 
-  // 1) thử $text nếu bạn có index cho Blog (an toàn try/catch)
-  let textItems = [],
-    totalText = 0;
+  // 1) Thử full-text
+  let textItems = [];
+  let totalText = 0;
   try {
     textItems = await Blog.find(
       { $text: { $search: q } },
@@ -178,7 +187,7 @@ async function searchBlogs(q, lang, skip = 0, limit = 5) {
     totalText = await Blog.countDocuments({ $text: { $search: q } });
   } catch (_) {}
 
-  // 2) regex fallback theo cấu trúc i18n: title/excerpt/content + tags
+  // 2) Fallback regex i18n (title/excerpt/content + tags)
   const regexFilter = {
     $or: [
       { "title.vi": { $regex: re } },
@@ -195,6 +204,7 @@ async function searchBlogs(q, lang, skip = 0, limit = 5) {
     .limit(Number(limit) * 2)
     .lean();
 
+  // 3) Hợp nhất (ưu tiên full-text), map sang dạng FE
   const map = new Map();
   [...textItems, ...regexItems].forEach((d) => map.set(String(d._id), d));
 
@@ -233,23 +243,30 @@ async function searchBlogs(q, lang, skip = 0, limit = 5) {
   return { total: Math.max(totalText, totalRegex), items };
 }
 
-/* ===== /api/search ===== */
+/* ============ GET /api/search ============ */
 export async function globalSearch(req, res, next) {
   try {
     const q = (req.query.q || "").trim();
-    const tab = req.query.tab || "all"; // "bots" | "blogs" | "all"
+    const tab = (req.query.tab || "all").toLowerCase();
     const limitBots = Number(req.query.limitBots || 5);
     const limitBlogs = Number(req.query.limitBlogs || 5);
     const skipBots = Number(req.query.skipBots || 0);
     const skipBlogs = Number(req.query.skipBlogs || 0);
     const lang = resolveLang(req);
 
+    // 👇 NEW: nhận category (đa giá trị)
+    const category = (
+      req.query.category ||
+      req.query.categories ||
+      ""
+    ).toString();
+
     if (!q) return res.status(400).json({ message: "q is required" });
 
     const [bots, blogs] = await Promise.all([
       tab === "blogs"
         ? { total: 0, items: [] }
-        : searchBots(q, lang, skipBots, limitBots),
+        : searchBots(q, lang, skipBots, limitBots, category), // <-- truyền category
       tab === "bots"
         ? { total: 0, items: [] }
         : searchBlogs(q, lang, skipBlogs, limitBlogs),
@@ -265,3 +282,4 @@ export async function globalSearch(req, res, next) {
     next(err);
   }
 }
+

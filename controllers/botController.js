@@ -156,19 +156,26 @@ export async function createBot(req, res, next) {
   }
 }
 
-// controllers/botController.js — REPLACE listBots
+/* ——— LIST / SEARCH ——— */
 export async function listBots(req, res, next) {
   try {
     const lang = resolveLang(req);
     const {
       q,
       tag,
-      category,
+      // Hỗ trợ cả category và categories, nhận nhiều value: "design-creative,writing-editing"
+      category: categoryRaw = "",
+      categories: categoriesRaw = "",
       status = "active",
       page = 1,
       limit = 12,
       skip,
     } = req.query;
+
+    const cats = String(categoryRaw || categoriesRaw)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
 
     const reMongo = q ? qToRegex(q, "i") : null;
     const reHi = q ? qToRegex(q, "ig") : null;
@@ -176,11 +183,12 @@ export async function listBots(req, res, next) {
     const base = {};
     if (status) base.status = status;
     if (tag) base.tags = tag;
-    if (category) base.category = category;
+    if (cats.length) base.category = { $in: cats }; // <-- đa category
 
     const pageNum =
       skip !== undefined
-        ? Math.floor((parseInt(skip, 10) || 0) / (parseInt(limit, 10) || 12)) + 1
+        ? Math.floor((parseInt(skip, 10) || 0) / (parseInt(limit, 10) || 12)) +
+          1
         : Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 12, 1), 100);
     const offset =
@@ -192,7 +200,7 @@ export async function listBots(req, res, next) {
     let total = 0;
     let docs = [];
 
-    // 1) ƯU TIÊN: $text (đúng nghĩa "full-text search") nếu có q
+    // 1) ƯU TIÊN: $text nếu có q (tôn trọng base gồm category)
     if (q) {
       try {
         const textFilter = { ...base, $text: { $search: q } };
@@ -206,11 +214,11 @@ export async function listBots(req, res, next) {
         ]);
         usedTextSearch = true;
       } catch (_) {
-        // có thể chưa build index -> fallback ở bước 2
+        /* fallback */
       }
     }
 
-    // 2) FALLBACK: Regex i18n nếu chưa dùng/không dùng được $text
+    // 2) FALLBACK: Regex i18n (vẫn tôn trọng base gồm category)
     if (!usedTextSearch) {
       const filter = { ...base };
       if (reMongo) {
@@ -249,7 +257,6 @@ export async function listBots(req, res, next) {
       ]);
     }
 
-    // map kết quả (giữ logic highlight/snippet như cũ)
     const items = docs.map((d) => {
       const namePref = pickMap(d.name, lang);
       const titlePref = pickMap(d.title, lang);
@@ -290,9 +297,13 @@ export async function listBots(req, res, next) {
         sources[7];
 
       const nameHighlighted =
-        reHi && namePref && reHi.test(namePref) ? hi(namePref, reHi) : undefined;
+        reHi && namePref && reHi.test(namePref)
+          ? hi(namePref, reHi)
+          : undefined;
       const titleHighlighted =
-        reHi && titlePref && reHi.test(titlePref) ? hi(titlePref, reHi) : undefined;
+        reHi && titlePref && reHi.test(titlePref)
+          ? hi(titlePref, reHi)
+          : undefined;
 
       return {
         _id: d._id,
@@ -310,7 +321,7 @@ export async function listBots(req, res, next) {
         nameHighlighted,
         titleHighlighted,
         summary: sumPref || "",
-        snippet: snippet(chosen.raw || "", reHi), // HTML
+        snippet: snippet(chosen.raw || "", reHi),
       };
     });
 
@@ -329,7 +340,6 @@ export async function listBots(req, res, next) {
   }
 }
 
-
 /* ——— FACETS ——— */
 export async function getBotFacets(req, res, next) {
   try {
@@ -339,7 +349,7 @@ export async function getBotFacets(req, res, next) {
     const filter = {};
     if (status) filter.status = status;
     if (tag) filter.tags = tag;
-    if (category) filter.category = category;
+    if (category) filter.category = { $in: cats };
     if (reMongo) {
       filter.$or = [
         { "name.vi": { $regex: reMongo } },

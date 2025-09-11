@@ -35,17 +35,39 @@ connectDB();
 // })();
 
 // CORS: cho phép gọi từ FE domain
+// const allow = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim());
+// app.use(
+//   cors({
+//     origin: "https://aitooler.io/",
+//     origin(origin, cb) {
+//       if (!origin || allow.includes(origin)) return cb(null, true);
+//       return cb(new Error("Not allowed by CORS"));
+//     },
+//     credentials: true, // Allow credentials (cookies, headers)
+//   })
+// );
+
+// CORS: cho phép gọi từ FE domain
 const allow = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim());
+
+// Luôn cho phép localhost:3000 + các domain trong biến môi trường
 app.use(
   cors({
-    origin: "https://aitooler.io/",
-    origin(origin, cb) {
-      if (!origin || allow.includes(origin)) return cb(null, true);
+    origin: function (origin, cb) {
+      if (
+        !origin ||
+        origin === "http://localhost:3000" ||
+        allow.includes(origin)
+      ) {
+        return cb(null, true);
+      }
       return cb(new Error("Not allowed by CORS"));
     },
-    credentials: true, // Allow credentials (cookies, headers)
+    credentials: true, // Cho phép gửi cookie / header xác thực
   })
 );
+
+// Session
 app.set("trust proxy", 1);
 app.use(
   session({
