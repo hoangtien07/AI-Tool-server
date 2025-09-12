@@ -34,13 +34,26 @@ connectDB();
 //   console.log("Finished syncing indexes.");
 // })();
 
-// CORS: cho phép gọi từ FE domain
-app.use(
-  cors({
-    origin: process.env.CORS_ORIGIN?.split(",") || "https://aitooler.io",
-    credentials: true,
-  })
-);
+// ----- CORS SAFE CONFIG -----
+const allow =
+  process.env.CORS_ORIGIN && process.env.CORS_ORIGIN.trim().length
+    ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
+    : ["https://aitooler.io", "http://localhost:3000"]; // fallback đúng https
+
+const corsOptions = {
+  origin(origin, cb) {
+    // Cho phép request không có Origin (healthcheck/curl) hoặc origin hợp lệ
+    if (!origin || allow.includes(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS: " + origin));
+  },
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // Session
 app.set("trust proxy", 1);
