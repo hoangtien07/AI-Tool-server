@@ -37,7 +37,7 @@ connectDB();
 // CORS: cho phép gọi từ FE domain
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN?.split(",") || "http://aitooler.io",
+    origin: process.env.CORS_ORIGIN?.split(",") || "https://aitooler.io",
     credentials: true,
   })
 );
