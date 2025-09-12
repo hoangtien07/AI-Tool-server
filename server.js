@@ -35,19 +35,6 @@ connectDB();
 // })();
 
 // CORS: cho phép gọi từ FE domain
-// const allow = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim());
-// app.use(
-//   cors({
-//     origin: "https://aitooler.io/",
-//     origin(origin, cb) {
-//       if (!origin || allow.includes(origin)) return cb(null, true);
-//       return cb(new Error("Not allowed by CORS"));
-//     },
-//     credentials: true, // Allow credentials (cookies, headers)
-//   })
-// );
-
-// CORS: cho phép gọi từ FE domain
 const allow =
   process.env.CORS_ORIGIN && process.env.CORS_ORIGIN.trim().length > 0
     ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
