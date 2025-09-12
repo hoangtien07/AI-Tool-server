@@ -35,24 +35,12 @@ connectDB();
 // })();
 
 // CORS: cho phép gọi từ FE domain
-const allow =
-  process.env.CORS_ORIGIN && process.env.CORS_ORIGIN.trim().length > 0
-    ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
-    : ["http://localhost:3000", "https://aitooler.io"]; // default fallback (KHÔNG dùng toán tử || chuỗi)
-
-const corsOptions = {
-  origin(origin, cb) {
-    // Cho phép: request không có Origin (ví dụ curl, healthchecks) hoặc các origin có trong allow
-    if (!origin || allow.includes(origin)) return cb(null, true);
-    return cb(new Error(`Not allowed by CORS: ${origin}`));
-  },
-  credentials: true, // nếu có dùng cookie / session
-  optionsSuccessStatus: 204, // tránh 200 cho preflight
-};
-
-// Áp dụng cho mọi route + preflight
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN?.split(",") || "http://aitooler.io",
+    credentials: true,
+  })
+);
 
 // Session
 app.set("trust proxy", 1);
